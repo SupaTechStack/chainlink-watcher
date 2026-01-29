@@ -2,7 +2,7 @@
 
 An automated GitHub Actions workflow that monitors the public  
 https://github.com/smartcontractkit/chainlink repository  
-and posts a clean, concise English update to X (Twitter) whenever a new commit is published.
+and posts a clean update to X (Twitter) whenever a new commit is published.
 
 The project focuses on **signal over noise** by converting raw GitHub commit activity into short, readable updates.
 
