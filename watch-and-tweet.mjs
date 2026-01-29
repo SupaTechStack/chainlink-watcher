@@ -10,16 +10,16 @@ const {
 } = process.env;
 
 if (!GH_REPO) {
-  console.error("❌ Missing GH_REPO");
+  console.error("Missing GH_REPO");
   process.exit(1);
 }
 if (!X_API_KEY || !X_API_SECRET || !X_ACCESS_TOKEN || !X_ACCESS_SECRET) {
-  console.error("❌ Missing X OAuth secrets (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)");
+  console.error("Missing X OAuth secrets");
   process.exit(1);
 }
 
 function percentEncode(str) {
-  return encodeURIComponent(str).replace(/[!*()']/g, c => `%${c.charCodeAt(0).toString(16)}`);
+  return encodeURIComponent(String(str)).replace(/[!*()']/g, c => `%${c.charCodeAt(0).toString(16)}`);
 }
 
 function oauthHeader(method, url) {
@@ -64,20 +64,29 @@ function oauthHeader(method, url) {
   );
 }
 
-/* ---------- state ---------- */
+function cleanSummary(input, maxLen = 90) {
+  let s = String(input || "").trim();
+  s = s.split("\n")[0].trim();
+  s = s.replace(/^(feat|fix|chore|refactor|docs|test|perf|build|ci|style|revert)(\([^)]+\))?\s*:\s*/i, "");
+  s = s.replace(/^merge\s+/i, "Merged ");
+  s = s.replace(/\s+/g, " ").trim();
+  if (!s) s = "New update";
+  if (s.length > maxLen) s = s.slice(0, maxLen - 1).trimEnd() + "…";
+  s = s.charAt(0).toUpperCase() + s.slice(1);
+  return s;
+}
+
 let state = { lastSha: "" };
 try {
   state = JSON.parse(fs.readFileSync("state.json", "utf8"));
 } catch {}
 
-/* ---------- github latest commit ---------- */
-const ghRes = await fetch(
-  `https://api.github.com/repos/${GH_REPO}/commits?per_page=1`,
-  { headers: { "User-Agent": "chainlink-watcher" } }
-);
+const ghRes = await fetch(`https://api.github.com/repos/${GH_REPO}/commits?per_page=1`, {
+  headers: { "User-Agent": "chainlink-watcher" }
+});
 
 if (!ghRes.ok) {
-  console.error("❌ GitHub API error", ghRes.status, await ghRes.text());
+  console.error("GitHub API error", ghRes.status, await ghRes.text());
   process.exit(1);
 }
 
@@ -88,11 +97,8 @@ if (!commit || commit.sha === state.lastSha) {
   process.exit(0);
 }
 
-/* ---------- tweet ---------- */
-const text =
-  `🔔 Chainlink update\n` +
-  `${commit.commit.message.split("\n")[0]}\n` +
-  `${commit.html_url}`;
+const summary = cleanSummary(commit.commit?.message, 90);
+const text = `🔔 Chainlink update\n\n${summary}\n🔗 ${commit.html_url}`;
 
 const url = "https://api.x.com/2/tweets";
 const auth = oauthHeader("POST", url);
@@ -114,6 +120,5 @@ if (!xRes.ok) {
   throw new Error("Tweet failed");
 }
 
-/* ---------- save ---------- */
 state.lastSha = commit.sha;
 fs.writeFileSync("state.json", JSON.stringify(state, null, 2));
