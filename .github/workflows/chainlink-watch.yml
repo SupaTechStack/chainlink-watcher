@@ -8,13 +8,21 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: chainlink-watch
+  cancel-in-progress: true
+
 jobs:
   watch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
           node-version: "20"
 
@@ -24,15 +32,15 @@ jobs:
           X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
         run: node watch-and-tweet.mjs
 
-      - name: Save state
+      - name: Commit state if changed
         run: |
           if git diff --quiet; then
             echo "No change"
-          else
-            git config user.name "github-actions"
-            git config user.email "github-actions@users.noreply.github.com"
-            git add state.json
-            git commit -m "Update last commit"
-            git push
+            exit 0
           fi
 
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add state.json
+          git commit -m "Update lastSha"
+          git push
