@@ -1,76 +1,119 @@
 import fs from "fs";
+import crypto from "crypto";
 
-const repo = process.env.GH_REPO;
-const token = process.env.X_BEARER_TOKEN;
+const {
+  GH_REPO,
+  X_API_KEY,
+  X_API_SECRET,
+  X_ACCESS_TOKEN,
+  X_ACCESS_SECRET
+} = process.env;
 
-if (!repo) {
-  console.error("Missing env GH_REPO");
+if (!GH_REPO) {
+  console.error("❌ Missing GH_REPO");
   process.exit(1);
 }
-if (!token) {
-  console.error("Missing env X_BEARER_TOKEN (check GitHub Secret name!)");
+if (!X_API_KEY || !X_API_SECRET || !X_ACCESS_TOKEN || !X_ACCESS_SECRET) {
+  console.error("❌ Missing X OAuth secrets (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, X_ACCESS_SECRET)");
   process.exit(1);
 }
 
-console.log("Repo:", repo);
-console.log("Has X token:", Boolean(token));
+function percentEncode(str) {
+  return encodeURIComponent(str).replace(/[!*()']/g, c => `%${c.charCodeAt(0).toString(16)}`);
+}
 
+function oauthHeader(method, url) {
+  const nonce = crypto.randomBytes(16).toString("hex");
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+
+  const oauthParams = {
+    oauth_consumer_key: X_API_KEY,
+    oauth_nonce: nonce,
+    oauth_signature_method: "HMAC-SHA1",
+    oauth_timestamp: timestamp,
+    oauth_token: X_ACCESS_TOKEN,
+    oauth_version: "1.0"
+  };
+
+  const paramString = Object.keys(oauthParams)
+    .sort()
+    .map(k => `${percentEncode(k)}=${percentEncode(oauthParams[k])}`)
+    .join("&");
+
+  const baseString = [
+    method.toUpperCase(),
+    percentEncode(url),
+    percentEncode(paramString)
+  ].join("&");
+
+  const signingKey = `${percentEncode(X_API_SECRET)}&${percentEncode(X_ACCESS_SECRET)}`;
+
+  const signature = crypto
+    .createHmac("sha1", signingKey)
+    .update(baseString)
+    .digest("base64");
+
+  const headerParams = { ...oauthParams, oauth_signature: signature };
+
+  return (
+    "OAuth " +
+    Object.keys(headerParams)
+      .sort()
+      .map(k => `${percentEncode(k)}="${percentEncode(headerParams[k])}"`)
+      .join(", ")
+  );
+}
+
+/* ---------- state ---------- */
 let state = { lastSha: "" };
 try {
   state = JSON.parse(fs.readFileSync("state.json", "utf8"));
-} catch (e) {
-  console.log("state.json missing/invalid, creating new.");
-}
+} catch {}
 
-const res = await fetch(`https://api.github.com/repos/${repo}/commits?per_page=1`, {
-  headers: {
-    "User-Agent": "chainlink-watcher",
-    "Accept": "application/vnd.github+json"
-  }
-});
+/* ---------- github latest commit ---------- */
+const ghRes = await fetch(
+  `https://api.github.com/repos/${GH_REPO}/commits?per_page=1`,
+  { headers: { "User-Agent": "chainlink-watcher" } }
+);
 
-if (!res.ok) {
-  const t = await res.text();
-  console.error("GitHub API error:", res.status, t);
+if (!ghRes.ok) {
+  console.error("❌ GitHub API error", ghRes.status, await ghRes.text());
   process.exit(1);
 }
 
-const [commit] = await res.json();
+const [commit] = await ghRes.json();
 
-if (!commit?.sha) {
-  console.log("No commit found");
-  process.exit(0);
-}
-
-if (commit.sha === state.lastSha) {
+if (!commit || commit.sha === state.lastSha) {
   console.log("No new commit");
   process.exit(0);
 }
 
+/* ---------- tweet ---------- */
 const text =
   `🔔 Chainlink update\n` +
   `${commit.commit.message.split("\n")[0]}\n` +
   `${commit.html_url}`;
 
-console.log("Tweet text:", text);
+const url = "https://api.x.com/2/tweets";
+const auth = oauthHeader("POST", url);
 
-const tweetRes = await fetch("https://api.x.com/2/tweets", {
+const xRes = await fetch(url, {
   method: "POST",
   headers: {
-    "Authorization": `Bearer ${token}`,
+    Authorization: auth,
     "Content-Type": "application/json"
   },
   body: JSON.stringify({ text })
 });
 
-const tweetBody = await tweetRes.text();
-console.log("X status:", tweetRes.status);
-console.log("X response:", tweetBody);
+const xBody = await xRes.text();
+console.log("X status:", xRes.status);
+console.log(xBody);
 
-if (!tweetRes.ok) {
-  throw new Error(`X API failed: ${tweetRes.status} ${tweetBody}`);
+if (!xRes.ok) {
+  throw new Error("Tweet failed");
 }
 
+/* ---------- save ---------- */
 state.lastSha = commit.sha;
 fs.writeFileSync("state.json", JSON.stringify(state, null, 2));
-console.log("Updated state.json lastSha:", state.lastSha);
