@@ -3,6 +3,7 @@ import crypto from "crypto";
 
 const {
   GH_REPO,
+  GH_TOKEN,
   X_API_KEY,
   X_API_SECRET,
   X_ACCESS_TOKEN,
@@ -19,7 +20,10 @@ if (!X_API_KEY || !X_API_SECRET || !X_ACCESS_TOKEN || !X_ACCESS_SECRET) {
 }
 
 function percentEncode(str) {
-  return encodeURIComponent(String(str)).replace(/[!*()']/g, c => `%${c.charCodeAt(0).toString(16)}`);
+  return encodeURIComponent(String(str)).replace(
+    /[!*()']/g,
+    (c) => `%${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`
+  );
 }
 
 function oauthHeader(method, url) {
@@ -37,7 +41,7 @@ function oauthHeader(method, url) {
 
   const paramString = Object.keys(oauthParams)
     .sort()
-    .map(k => `${percentEncode(k)}=${percentEncode(oauthParams[k])}`)
+    .map((k) => `${percentEncode(k)}=${percentEncode(oauthParams[k])}`)
     .join("&");
 
   const baseString = [
@@ -46,7 +50,9 @@ function oauthHeader(method, url) {
     percentEncode(paramString)
   ].join("&");
 
-  const signingKey = `${percentEncode(X_API_SECRET)}&${percentEncode(X_ACCESS_SECRET)}`;
+  const signingKey = `${percentEncode(X_API_SECRET)}&${percentEncode(
+    X_ACCESS_SECRET
+  )}`;
 
   const signature = crypto
     .createHmac("sha1", signingKey)
@@ -59,7 +65,7 @@ function oauthHeader(method, url) {
     "OAuth " +
     Object.keys(headerParams)
       .sort()
-      .map(k => `${percentEncode(k)}="${percentEncode(headerParams[k])}"`)
+      .map((k) => `${percentEncode(k)}="${percentEncode(headerParams[k])}"`)
       .join(", ")
   );
 }
@@ -67,7 +73,10 @@ function oauthHeader(method, url) {
 function cleanSummary(input, maxLen = 90) {
   let s = String(input || "").trim();
   s = s.split("\n")[0].trim();
-  s = s.replace(/^(feat|fix|chore|refactor|docs|test|perf|build|ci|style|revert)(\([^)]+\))?\s*:\s*/i, "");
+  s = s.replace(
+    /^(feat|fix|chore|refactor|docs|test|perf|build|ci|style|revert)(\([^)]+\))?\s*:\s*/i,
+    ""
+  );
   s = s.replace(/^merge\s+/i, "Merged ");
   s = s.replace(/\s+/g, " ").trim();
   if (!s) s = "New update";
@@ -81,9 +90,13 @@ try {
   state = JSON.parse(fs.readFileSync("state.json", "utf8"));
 } catch {}
 
-const ghRes = await fetch(`https://api.github.com/repos/${GH_REPO}/commits?per_page=1`, {
-  headers: { "User-Agent": "chainlink-watcher" }
-});
+const ghHeaders = { "User-Agent": "chainlink-watcher" };
+if (GH_TOKEN) ghHeaders.Authorization = `Bearer ${GH_TOKEN}`;
+
+const ghRes = await fetch(
+  `https://api.github.com/repos/${GH_REPO}/commits?per_page=1`,
+  { headers: ghHeaders }
+);
 
 if (!ghRes.ok) {
   console.error("GitHub API error", ghRes.status, await ghRes.text());
@@ -114,7 +127,7 @@ const xRes = await fetch(url, {
 
 const xBody = await xRes.text();
 console.log("X status:", xRes.status);
-console.log(xBody);
+console.log(xBody.slice(0, 300));
 
 if (!xRes.ok) {
   throw new Error("Tweet failed");
