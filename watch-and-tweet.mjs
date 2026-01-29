@@ -34,3 +34,5 @@ await fetch("https://api.x.com/2/tweets", {
 state.lastSha = commit.sha;
 fs.writeFileSync("state.json", JSON.stringify(state, null, 2));
 
+// watcher active
+
