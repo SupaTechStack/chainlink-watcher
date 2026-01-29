@@ -1,8 +1,8 @@
 # Chainlink GitHub → X Auto Watcher
 
 An automated GitHub Actions workflow that monitors the public  
-https://github.com/smartcontractkit/chainlink repository  
-and posts a clean update to X (Twitter) whenever a new commit is published.
+[smartcontractkit/chainlink](https://github.com/smartcontractkit/chainlink) repository  
+and posts a clean, concise update to X (Twitter) whenever a new commit is published.
 
 The project focuses on **signal over noise** by converting raw GitHub commit activity into short, readable updates.
 
@@ -136,5 +136,3 @@ Built by **SupaTechStack**
 
 Automated monitoring of real developer activity,  
 focused on clarity, relevance, and reliability.
-
-
