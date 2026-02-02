@@ -1,138 +1,97 @@
-# Chainlink GitHub → X Auto Watcher
+# Chainlink GitHub to X Watcher
 
-An automated GitHub Actions workflow that monitors the public  
-[smartcontractkit/chainlink](https://github.com/smartcontractkit/chainlink) repository  
-and posts a clean, concise update to X (Twitter) whenever a new commit is published.
-
-The project focuses on **signal over noise** by converting raw GitHub commit activity into short, readable updates.
-
----
+Automated GitHub Actions workflow that monitors the public
+smartcontractkit/chainlink repository and posts concise updates to X
+based on new releases and newly merged pull requests. The workflow is
+designed to focus on signal over noise by filtering for relevant changes
+and by maintaining state to avoid duplicates.
 
 ## Features
 
-- Monitors a public GitHub repository for new commits
-- Posts exactly one tweet per new commit
-- Prevents duplicate tweets using state tracking
-- Generates clean English summaries (technical prefixes removed)
-- Includes a direct link to the original GitHub commit
-- Fully automated using GitHub Actions
-- No server, database, or external infrastructure required
-- Free-tier friendly
-
----
+- Monitors the latest GitHub release and posts an update when it changes
+- Scans recently merged pull requests and posts only those that match
+  relevance filters (keywords and labels)
+- Prevents duplicate posts using local state tracking in state.json
+- Produces short, clean summaries with a link to the source
+- Fully automated via GitHub Actions on a 15-minute schedule
+- No external infrastructure required
 
 ## How It Works
 
-1. A GitHub Action runs every 15 minutes or manually via workflow dispatch
-2. The latest commit is fetched from the GitHub API
-3. The commit SHA is compared against a locally stored state (`state.json`)
-4. If the commit is new:
-   - A clean English summary is generated
-   - A tweet is posted via the official X API
-   - The commit SHA is saved to prevent duplicate tweets
-5. If there is no new commit, nothing is posted
-
----
+1. A GitHub Action runs every 15 minutes (or manually via workflow dispatch).
+2. The script checks the most recent release for the repository.
+3. If the release is new, it posts an update and stores the release ID.
+4. If there is no new release, it scans recently merged pull requests.
+5. Only pull requests matching relevance filters are posted.
+6. The most recent processed merge time is stored to prevent repeats.
 
 ## Tweet Format
 
-Example tweet:
+Release updates:
 
-🔔 Chainlink update
+Chainlink release: <tag>
+- <highlight 1>
+- <highlight 2>
+link
 
-Improved OCR gas estimation logic
-🔗 https://github.com/smartcontractkit/chainlink/commit/abc123
+Pull request updates:
 
+Chainlink dev signal (merged)
+- <summary>
+link
 
-Tweet characteristics:
-- English
-- Short and readable
-- No hashtags
-- No mentions
-- One tweet per commit
+## Tech Stack
 
----
+- GitHub Actions
+- Node.js 20 (ESM, native fetch)
+- GitHub REST API
+- X API v2 (OAuth 1.0a)
 
-## ⚙️ Tech Stack
+## Required Secrets
 
-- **GitHub Actions** – automation and scheduling
-- **Node.js 20** – runtime (ESM, native `fetch`)
-- **GitHub REST API** – commit data
-- **X API v2** – posting tweets (OAuth 1.0a)
+Configure the following repository secrets:
 
----
+- X_API_KEY
+- X_API_SECRET
+- X_ACCESS_TOKEN
+- X_ACCESS_SECRET
 
-## 🔐 Required Secrets
+Optionally, provide the default GitHub token as GH_TOKEN for higher API
+rate limits. The workflow already maps secrets.GITHUB_TOKEN to GH_TOKEN.
 
-The following secrets must be configured in  
-**GitHub → Repository → Settings → Actions → Secrets**:
+## Files
 
-- `X_API_KEY`
-- `X_API_SECRET`
-- `X_ACCESS_TOKEN`
-- `X_ACCESS_SECRET`
+- watch-and-tweet.mjs
+- state.json
+- .github/workflows/chainlink-watch.yml
 
-These credentials are required to authenticate with the X API using OAuth 1.0a.
+## Running the Workflow
 
----
+Automatic execution:
+- Runs every 15 minutes via cron schedule
 
-## 📁 Repository Structure
+Manual execution:
+1. Open Actions in GitHub
+2. Select the workflow
+3. Click Run workflow
 
-.
-├── watch-and-tweet.mjs
-├── state.json
-└── .github
-└── workflows
-└── chainlink-watch.yml
+## Configuration
 
+Environment variables:
 
----
+- GH_REPO: GitHub repository in owner/name format
+- GH_TOKEN: GitHub token for API access
+- GH_API_BASE: Optional GitHub API base URL
+- INCLUDE_PRERELEASES: Set to any value to allow prereleases
+- INCLUDE_DRAFTS: Set to any value to allow draft releases
 
-## 🚀 Running the Workflow
+## Notes
 
-### Automatic Execution
-- Runs every **15 minutes** via cron schedule
+- The script treats duplicate X responses as a non-fatal outcome to avoid
+  repeated failures when the same content is posted.
+- State is stored in state.json and committed back to the repository by
+  the workflow.
 
-### Manual Execution
-1. Go to **Actions**
-2. Select **Watch Chainlink and Tweet**
-3. Click **Run workflow**
-4. Choose branch `main`
+## License
 
----
-
-## 🛡️ Safety & Compliance
-
-- Uses only **public GitHub data**
-- Uses official GitHub and X APIs
-- Posts original, auto-generated summaries
-- Does not copy or redistribute source code
-- No aggressive posting or spam behavior
-
-This setup is compliant with GitHub and X platform rules.
-
----
-
-## 🔁 Reusability
-
-This project can easily be adapted for:
-- Other GitHub repositories
-- Multiple repositories
-- Release-based monitoring instead of commits
-- Daily or weekly summaries
-- Other social platforms with supported APIs
-
----
-
-## 📜 License
-
-MIT License
-
----
-
-## 👤 Author
-
-Built by **SupaTechStack**
-
-Automated monitoring of real developer activity,  
-focused on clarity, relevance, and reliability.
+MIT
