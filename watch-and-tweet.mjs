@@ -3,6 +3,10 @@ import crypto from "crypto";
 
 const {
   GH_REPO,
+  GH_TOKEN,
+  GH_API_BASE,
+  INCLUDE_PRERELEASES,
+  INCLUDE_DRAFTS,
   X_API_KEY,
   X_API_SECRET,
   X_ACCESS_TOKEN,
@@ -17,6 +21,14 @@ if (!X_API_KEY || !X_API_SECRET || !X_ACCESS_TOKEN || !X_ACCESS_SECRET) {
   console.error("Missing X OAuth secrets");
   process.exit(1);
 }
+
+if (!GH_TOKEN) {
+  console.warn("Warning: GH_TOKEN not set. GitHub API rate limits will be lower.");
+}
+
+const GH_API = GH_API_BASE || "https://api.github.com";
+const MAX_PAGES = 15;
+const PER_PAGE = 100;
 
 function percentEncode(str) {
   return encodeURIComponent(String(str)).replace(/[!*()']/g, c => `%${c.charCodeAt(0).toString(16)}`);
@@ -59,7 +71,7 @@ function oauthHeader(method, url) {
     "OAuth " +
     Object.keys(headerParams)
       .sort()
-      .map(k => `${percentEncode(k)}="${percentEncode(headerParams[k])}"`)
+      .map(k => `${percentEncode(k)}=\"${percentEncode(headerParams[k])}\"`)
       .join(", ")
   );
 }
@@ -128,7 +140,7 @@ function buildTweet({ header, lines, link }, maxLen = 275) {
   if (text.length <= maxLen) return text;
 
   const safeLines = [];
-  let base = `${header.trim()}\n\n`;
+  const base = `${header.trim()}\n\n`;
   for (const l of (lines || [])) {
     const candidate = (safeLines.length ? safeLines.join("\n") + "\n" : "") + l;
     const candidateText = (base + candidate + `\n\n🔗 ${link}`).trim();
@@ -148,18 +160,62 @@ function buildTweet({ header, lines, link }, maxLen = 275) {
   return text;
 }
 
-async function ghFetch(path) {
-  const res = await fetch(`https://api.github.com/repos/${GH_REPO}${path}`, {
-    headers: {
-      "User-Agent": "chainlink-watcher",
-      "Accept": "application/vnd.github+json"
+async function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function ghHeaders() {
+  const headers = {
+    "User-Agent": "chainlink-watcher",
+    "Accept": "application/vnd.github+json"
+  };
+  if (GH_TOKEN) headers.Authorization = `Bearer ${GH_TOKEN}`;
+  return headers;
+}
+
+async function ghFetchJson(path, { retries = 2, timeoutMs = 15000 } = {}) {
+  let attempt = 0;
+  while (true) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${GH_API}/repos/${GH_REPO}${path}`, {
+        headers: ghHeaders(),
+        signal: controller.signal
+      });
+
+      if (!res.ok) {
+        const body = await res.text();
+        const remaining = res.headers.get("x-ratelimit-remaining");
+        const reset = res.headers.get("x-ratelimit-reset");
+
+        if ((res.status === 403 || res.status === 429) && remaining === "0") {
+          const resetDate = reset ? new Date(Number(reset) * 1000).toISOString() : "unknown";
+          console.warn(`GitHub rate limit exceeded. Reset at ${resetDate}.`);
+          return null;
+        }
+
+        if (res.status >= 500 && attempt < retries) {
+          attempt += 1;
+          await sleep(1000 * attempt);
+          continue;
+        }
+
+        throw new Error(`GitHub API error ${res.status}: ${body}`);
+      }
+
+      return res.json();
+    } catch (err) {
+      if (attempt < retries) {
+        attempt += 1;
+        await sleep(1000 * attempt);
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeout);
     }
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`GitHub API error ${res.status}: ${body}`);
   }
-  return res.json();
 }
 
 function isInterestingPR(pr) {
@@ -202,55 +258,99 @@ async function postTweet(text) {
   }
 }
 
-const state = readState();
+async function fetchRecentMergedPRsSince(lastMergedAtIso) {
+  const lastTs = lastMergedAtIso ? Date.parse(lastMergedAtIso) : 0;
+  let page = 1;
+  let newestMergedAt = 0;
+  const merged = [];
 
-let tweeted = false;
+  while (page <= MAX_PAGES) {
+    const data = await ghFetchJson(`/pulls?state=closed&sort=updated&direction=desc&per_page=${PER_PAGE}&page=${page}`);
+    if (!Array.isArray(data)) break;
+    if (!data.length) break;
 
-const releases = await ghFetch("/releases?per_page=1");
-const latestRelease = Array.isArray(releases) ? releases[0] : null;
+    let shouldStop = false;
 
-if (latestRelease && Number(latestRelease.id) && Number(latestRelease.id) !== Number(state.lastReleaseId)) {
-  const tag = cleanLine(latestRelease.tag_name || latestRelease.name || "New release");
-  const highlights = extractHighlightsFromReleaseBody(latestRelease.body, 2);
-  const header = `🚀 Chainlink release: ${tag}`;
-  const lines = highlights.length ? highlights.map(h => `• ${h}`) : [cleanSummary(latestRelease.name || "New release", 140)];
-  const link = latestRelease.html_url;
+    for (const pr of data) {
+      const updatedAt = Date.parse(pr?.updated_at || "");
+      if (Number.isFinite(updatedAt) && updatedAt <= lastTs) {
+        shouldStop = true;
+        continue;
+      }
 
-  const text = buildTweet({ header, lines, link });
-  await postTweet(text);
+      if (!pr || !pr.merged_at) continue;
+      const t = Date.parse(pr.merged_at);
+      if (!Number.isFinite(t)) continue;
+      if (t <= lastTs) continue;
 
-  state.lastReleaseId = Number(latestRelease.id);
-  if (latestRelease.published_at) {
-    const t = new Date(latestRelease.published_at).toISOString();
-    if (!state.lastPrMergedAt) state.lastPrMergedAt = t;
+      merged.push({ pr, t });
+      if (t > newestMergedAt) newestMergedAt = t;
+    }
+
+    if (shouldStop) break;
+    page += 1;
   }
 
-  writeState(state);
-  tweeted = true;
+  const exhausted = page > MAX_PAGES;
+  return {
+    merged,
+    newestMergedAt: newestMergedAt ? new Date(newestMergedAt).toISOString() : "",
+    exhausted
+  };
+}
+
+const state = readState();
+let tweeted = false;
+
+const releases = await ghFetchJson("/releases?per_page=1");
+const latestRelease = Array.isArray(releases) ? releases[0] : null;
+
+if (latestRelease && Number(latestRelease.id)) {
+  const isDraft = Boolean(latestRelease.draft);
+  const isPrerelease = Boolean(latestRelease.prerelease);
+
+  if ((isDraft && !INCLUDE_DRAFTS) || (isPrerelease && !INCLUDE_PRERELEASES)) {
+    console.log("Latest release is draft/prerelease; skipping.");
+  } else if (Number(latestRelease.id) !== Number(state.lastReleaseId)) {
+    const tag = cleanLine(latestRelease.tag_name || latestRelease.name || "New release");
+    const highlights = extractHighlightsFromReleaseBody(latestRelease.body, 2);
+    const header = `🚀 Chainlink release: ${tag}`;
+    const lines = highlights.length ? highlights.map(h => `• ${h}`) : [cleanSummary(latestRelease.name || "New release", 140)];
+    const link = latestRelease.html_url;
+
+    const text = buildTweet({ header, lines, link });
+    await postTweet(text);
+
+    state.lastReleaseId = Number(latestRelease.id);
+    if (latestRelease.published_at) {
+      const t = new Date(latestRelease.published_at).toISOString();
+      if (!state.lastPrMergedAt) state.lastPrMergedAt = t;
+    }
+
+    writeState(state);
+    tweeted = true;
+  }
 }
 
 if (!tweeted) {
-  const prs = await ghFetch("/pulls?state=closed&sort=updated&direction=desc&per_page=20");
-  const lastTs = state.lastPrMergedAt ? Date.parse(state.lastPrMergedAt) : 0;
+  const { merged, newestMergedAt, exhausted } = await fetchRecentMergedPRsSince(state.lastPrMergedAt);
 
-  const merged = (Array.isArray(prs) ? prs : [])
-    .filter(pr => pr && pr.merged_at)
-    .map(pr => ({ pr, t: Date.parse(pr.merged_at) }))
-    .filter(x => Number.isFinite(x.t) && x.t > lastTs)
-    .sort((a, b) => b.t - a.t);
-
-  const interesting = merged.filter(x => isInterestingPR(x.pr));
+  if (exhausted) {
+    console.warn("PR scan hit page limit; skipping state update to avoid missing merges.");
+  }
 
   if (!merged.length) {
     console.log("No new merged PRs");
     process.exit(0);
   }
 
-  const newestMergedAt = new Date(merged[0].t).toISOString();
+  const interesting = merged.filter(x => isInterestingPR(x.pr));
 
   if (!interesting.length) {
-    state.lastPrMergedAt = newestMergedAt;
-    writeState(state);
+    if (!exhausted && newestMergedAt) {
+      state.lastPrMergedAt = newestMergedAt;
+      writeState(state);
+    }
     console.log("New PR merges but none matched filters");
     process.exit(0);
   }
@@ -265,8 +365,10 @@ if (!tweeted) {
     const text = buildTweet({ header, lines, link });
     await postTweet(text);
 
-    state.lastPrMergedAt = newestMergedAt;
-    writeState(state);
+    if (!exhausted && newestMergedAt) {
+      state.lastPrMergedAt = newestMergedAt;
+      writeState(state);
+    }
     process.exit(0);
   }
 
@@ -277,6 +379,9 @@ if (!tweeted) {
   const text = buildTweet({ header, lines: top, link });
   await postTweet(text);
 
-  state.lastPrMergedAt = newestMergedAt;
-  writeState(state);
+  if (!exhausted && newestMergedAt) {
+    state.lastPrMergedAt = newestMergedAt;
+    writeState(state);
+  }
 }
+
