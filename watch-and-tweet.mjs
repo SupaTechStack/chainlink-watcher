@@ -71,7 +71,7 @@ function oauthHeader(method, url) {
     "OAuth " +
     Object.keys(headerParams)
       .sort()
-      .map(k => `${percentEncode(k)}=\"${percentEncode(headerParams[k])}\"`)
+      .map(k => `${percentEncode(k)}="${percentEncode(headerParams[k])}"`)
       .join(", ")
   );
 }
@@ -254,8 +254,15 @@ async function postTweet(text) {
   console.log(xBody);
 
   if (!xRes.ok) {
+    // Duplicate content: treat as success to avoid endless retries
+    if (xRes.status === 403 && /duplicate content/i.test(xBody)) {
+      console.warn("Duplicate tweet detected; skipping.");
+      return { skipped: true };
+    }
     throw new Error("Tweet failed");
   }
+
+  return { skipped: false };
 }
 
 async function fetchRecentMergedPRsSince(lastMergedAtIso) {
@@ -384,4 +391,3 @@ if (!tweeted) {
     writeState(state);
   }
 }
-
