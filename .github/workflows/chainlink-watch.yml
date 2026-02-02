@@ -46,7 +46,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git pull --rebase origin main
+          git pull --rebase --autostash origin main
           git add state.json
           git commit -m "Update state"
           git push origin main
