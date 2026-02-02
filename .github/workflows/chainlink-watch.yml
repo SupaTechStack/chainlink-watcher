@@ -15,12 +15,19 @@ concurrency:
 jobs:
   watch:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           persist-credentials: true
           fetch-depth: 0
+
+      - name: Sync with main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -39,14 +46,10 @@ jobs:
 
       - name: Commit state if changed
         run: |
-          if git diff --quiet; then
+          if git diff --quiet -- state.json; then
             exit 0
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git pull --rebase --autostash origin main
           git add state.json
           git commit -m "Update state"
           git push origin main
